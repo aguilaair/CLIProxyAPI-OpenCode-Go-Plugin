@@ -74,7 +74,7 @@ const (
 	pluginID      = "opencode-go-oauth"
 	providerID    = "opencode-go"
 	pluginName    = "OpenCode Go"
-	pluginVersion = "0.1.10"
+	pluginVersion = "0.1.11"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin"
 	pluginLogo    = "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin/main/assets/logo.png"
@@ -144,7 +144,6 @@ type registrationCapability struct {
 	ExecutorModelScope    pluginapi.ExecutorModelScope `json:"executor_model_scope"`
 	ExecutorInputFormats  []string                     `json:"executor_input_formats"`
 	ExecutorOutputFormats []string                     `json:"executor_output_formats"`
-	ManagementAPI         bool                         `json:"management_api"`
 	QuotaProvider         bool                         `json:"quota_provider"`
 }
 
@@ -227,7 +226,6 @@ func pluginRegistration() registration {
 			ExecutorModelScope:    pluginapi.ExecutorModelScopeBoth,
 			ExecutorInputFormats:  []string{"openai", "claude", "codex", "openai-response", "gemini"},
 			ExecutorOutputFormats: []string{"openai", "claude", "codex", "openai-response", "gemini"},
-			ManagementAPI:         true,
 			QuotaProvider:         true,
 		},
 	}
@@ -332,11 +330,6 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleQuotaFetch(request)
 	case pluginabi.MethodQuotaReset:
 		return handleQuotaReset(request)
-
-	case pluginabi.MethodManagementRegister:
-		return okEnvelope(managementRegistrationPayload())
-	case pluginabi.MethodManagementHandle:
-		return handleManagement(request)
 
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method, 0), nil

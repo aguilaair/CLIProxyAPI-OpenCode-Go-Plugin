@@ -6,7 +6,7 @@
       "name": "OpenCode Go oAuth Provider",
       "description": "Adds OpenCode Go / Go Plus OAuth device login, full 44-model catalog across Chat Completions, Responses, Anthropic Messages, and Gemini protocols, and per-model allowance usage tracking.",
       "author": "esauvisky",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "repository": "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin",
       "homepage": "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin",
       "logo": "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin/main/assets/logo.png",

@@ -7,7 +7,7 @@ This ABI v1 plugin adds **OpenCode Go / Go Plus** (`opencode-go`) support to CLI
   - **OpenAI Responses** (`/inference/go/openai/v1/responses`): `gpt-6-luna`, `gpt-5.6-luna`, `grok-4.7`, `grok-4.6`, `muse-spark-1.3-contributor`, `muse-spark-1.2-contributor`
   - **Anthropic Messages** (`/inference/go/anthropic/v1/messages`): `claude-haiku-5-5`, `minimax-m3`, `minimax-m2.7`, `qwen3.8-max`, `qwen3.8-flash`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-plus`
   - **Google Gemini** (`/inference/go/google/v1beta/models/<model>:generateContent`): `gemini-4-argon`, `gemini-4-argon-contributor`
-- **Quota & Per-Model Allowance Telemetry**: Extracts `usage.opencode` (`billing_source`, `list_cost`, `allowance`, token breakdown) from every response, exposes 5-hour / weekly / monthly rolling buckets via `QuotaProvider`, and serves a live per-model breakdown dashboard at **Plugins > OpenCode Go Stats** (`/v0/resource/plugins/opencode-go/stats`).
+- **Quota & Per-Model Allowance Telemetry**: Extracts `usage.opencode` (`billing_source`, `list_cost`, `allowance`, token breakdown) from every response, exposes 5-hour / weekly / monthly rolling buckets via `QuotaProvider`.
 
 ## Build
 
