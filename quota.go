@@ -328,6 +328,34 @@ func handleQuotaFetch(raw []byte) ([]byte, error) {
 	}
 	now := time.Now().UTC()
 	planLabel, cap5h, cap7d, cap30d := resolveAllowanceCapsForAuth(req)
+
+	tierID := "go-plus"
+	if strings.Contains(strings.ToLower(planLabel), "($10") {
+		tierID = "go"
+	}
+	subscription := &pluginapi.QuotaSubscription{
+		Plan:     planLabel,
+		TierName: planLabel,
+		TierID:   tierID,
+	}
+
+	// Prefer the real usage OpenCode reports for this account. The local
+	// estimate below only sees traffic that went through this proxy since the
+	// last restart, so it is a fallback for when the live call fails.
+	token, orgID := extractAuthCredentials(req.StorageJSON, req.Attributes)
+	liveBuckets, errLive := fetchLiveUsage(req.HostCallbackID, token, orgID)
+	if errLive == nil {
+		return okEnvelope(pluginapi.QuotaFetchResponse{
+			Subscription: subscription,
+			Groups: []pluginapi.QuotaGroup{
+				{
+					DisplayName: "OpenCode Go Usage (live from opencode.ai)",
+					Buckets:     liveBuckets,
+				},
+			},
+		})
+	}
+
 	used5h, used7d, used30d, oldest5h, oldest7d, oldest30d := computeWindowTotals(req.AuthID, now)
 
 	makeBucket := func(window string, used, capVal float64, oldest time.Time, dur time.Duration) pluginapi.QuotaBucket {
@@ -352,20 +380,11 @@ func handleQuotaFetch(raw []byte) ([]byte, error) {
 		}
 	}
 
-	tierID := "go-plus"
-	if strings.Contains(strings.ToLower(planLabel), "($10") {
-		tierID = "go"
-	}
-
 	return okEnvelope(pluginapi.QuotaFetchResponse{
-		Subscription: &pluginapi.QuotaSubscription{
-			Plan:     planLabel,
-			TierName: planLabel,
-			TierID:   tierID,
-		},
+		Subscription: subscription,
 		Groups: []pluginapi.QuotaGroup{
 			{
-				DisplayName: "OpenCode Go Shared Allowance (Tracked by CPA)",
+				DisplayName: fmt.Sprintf("OpenCode Go Allowance (CPA estimate; live usage unavailable: %s)", errLive),
 				Buckets: []pluginapi.QuotaBucket{
 					makeBucket("5h", used5h, cap5h, oldest5h, rolling5hWindow),
 					makeBucket("weekly", used7d, cap7d, oldest7d, rollingWeeklyWindow),
@@ -393,4 +412,108 @@ func firstPositiveInt64(vals ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+// liveUsageWindow is one window of the opencode.ai GET /v1/usage response, e.g.
+// {"usage":{"rolling":{"status":"ok","percent":4,"resetsAt":"2026-11-10T22:29:13.000Z"}, ...}}.
+type liveUsageWindow struct {
+	Status   string   `json:"status"`
+	Percent  *float64 `json:"percent"`
+	ResetsAt string   `json:"resetsAt"`
+}
+
+// liveUsageWindows maps upstream window names to the bucket windows this
+// plugin has always reported, so the management UI keeps the same rows.
+var liveUsageWindows = []struct {
+	upstream string
+	window   string
+	label    string
+}{
+	{upstream: "rolling", window: "5h", label: "Rolling (5h)"},
+	{upstream: "weekly", window: "weekly", label: "Weekly"},
+	{upstream: "monthly", window: "monthly", label: "Monthly"},
+}
+
+// fetchLiveUsage asks opencode.ai for the account's real usage percentages and
+// reset times, using the credential's own token through the host HTTP bridge.
+func fetchLiveUsage(hostCallbackID, token, orgID string) ([]pluginapi.QuotaBucket, error) {
+	if strings.TrimSpace(hostCallbackID) == "" {
+		return nil, fmt.Errorf("host callback unavailable")
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("credential has no access token")
+	}
+	cfg := currentConfig()
+	headers := http.Header{
+		"Authorization": []string{"Bearer " + token},
+		"Accept":        []string{"application/json"},
+		"User-Agent":    []string{cfg.UserAgent},
+	}
+	if org := strings.TrimSpace(orgID); org != "" {
+		headers.Set("x-opencode-org-id", org)
+	}
+	resp, errHTTP := doHostHTTP(hostCallbackID, http.MethodGet, cfg.InferenceBaseURL+"/v1/usage", headers, nil)
+	if errHTTP != nil {
+		return nil, fmt.Errorf("usage request failed: %w", errHTTP)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("usage endpoint returned HTTP %d", resp.StatusCode)
+	}
+	return parseLiveUsage(resp.Body)
+}
+
+// parseLiveUsage converts the /v1/usage body into quota buckets. Windows that
+// are absent are skipped; a rate-limited window reports nothing remaining.
+func parseLiveUsage(body []byte) ([]pluginapi.QuotaBucket, error) {
+	var decoded struct {
+		Usage map[string]liveUsageWindow `json:"usage"`
+	}
+	if errUnmarshal := json.Unmarshal(body, &decoded); errUnmarshal != nil {
+		return nil, fmt.Errorf("usage response is not valid JSON")
+	}
+	buckets := make([]pluginapi.QuotaBucket, 0, len(liveUsageWindows))
+	for _, w := range liveUsageWindows {
+		win, ok := decoded.Usage[w.upstream]
+		if !ok {
+			continue
+		}
+		limited := strings.EqualFold(strings.TrimSpace(win.Status), "rate-limited")
+		usedPct := 100.0
+		switch {
+		case win.Percent != nil:
+			p := *win.Percent
+			if math.IsNaN(p) || math.IsInf(p, 0) {
+				return nil, fmt.Errorf("usage window %s has an invalid percent", w.upstream)
+			}
+			usedPct = math.Max(0, math.Min(100, p))
+		case !limited:
+			return nil, fmt.Errorf("usage window %s has no percent", w.upstream)
+		}
+		if limited {
+			usedPct = 100
+		}
+		reset := ""
+		if s := strings.TrimSpace(win.ResetsAt); s != "" {
+			t, errParse := time.Parse(time.RFC3339Nano, s)
+			if errParse != nil {
+				return nil, fmt.Errorf("usage window %s has an invalid reset time", w.upstream)
+			}
+			reset = t.UTC().Format(time.RFC3339)
+		}
+		desc := fmt.Sprintf("%s: %.0f%% used", w.label, usedPct)
+		if limited {
+			desc += " (rate-limited)"
+		}
+		buckets = append(buckets, pluginapi.QuotaBucket{
+			Window:            w.window,
+			RemainingFraction: math.Round((1-usedPct/100)*10000) / 10000,
+			ResetTime:         reset,
+			Description:       desc,
+		})
+	}
+	if len(buckets) == 0 {
+		return nil, fmt.Errorf("usage response has no windows")
+	}
+	return buckets, nil
 }
